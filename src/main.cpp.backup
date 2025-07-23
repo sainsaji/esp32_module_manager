@@ -1,0 +1,276 @@
+#include <Arduino.h>
+#include <wasm3.h>
+#include <m3_env.h>
+#include "app_wasm.h"
+
+#define WASM_STACK_SLOTS    1024
+#define NATIVE_STACK_SIZE   (32*1024)
+#define WASM_MEMORY_LIMIT   4096
+
+// Structure to hold module information
+struct WasmModule {
+    const char* name;
+    const unsigned char* bytecode;
+    unsigned int size;
+};
+
+#define DEFINE_WASM_API(name, args_block, native_call) \
+    m3ApiRawFunction(name) { \
+        args_block          /* <- extract args here */ \
+        native_call;        /* <- call native function */ \
+        m3ApiSuccess();     \
+    }
+
+
+// Array of available modules
+WasmModule modules[] = {
+    {"select module 1", module1, module1_len},
+    {"select module 2", module2, module2_len},
+    {"select module 3", module3, module3_len}
+};
+
+const int NUM_MODULES = sizeof(modules) / sizeof(modules[0]);
+int current_module = -1;
+TaskHandle_t wasm_task_handle = NULL;
+
+// API bindings
+DEFINE_WASM_API(
+  m3_arduino_delay,  // name of the to be funtion used in wasm
+  m3ApiGetArg(uint32_t, ms), //argument details
+  delay(ms) // actual funtion to be exposed
+)
+
+DEFINE_WASM_API(
+  m3_arduino_print,
+  m3ApiGetArgMem(const uint8_t *, buf)
+  m3ApiGetArg(uint32_t, len),
+  Serial.write(buf, len)
+)
+
+#define ARDUINO_WASM_BINDINGS \
+    X("arduino_delay",      "v(i)",   m3_arduino_delay) \
+    X("arduino_print",      "v(*i)",  m3_arduino_print) \
+
+M3Result LinkArduino(IM3Runtime runtime)
+{
+    IM3Module module = runtime->modules;
+    const char* env = "env";
+
+    Serial.println("🔗 Linking Arduino functions...");
+
+    M3Result result = m3Err_none;
+
+    #define X(name, sig, fn) \
+        result = m3_LinkRawFunction(module, env, name, sig, &fn); \
+        if (result == m3Err_none) Serial.println("✓ " name " linked"); \
+        else Serial.printf("❌ Failed to link " name ": %s\n", result);
+
+    ARDUINO_WASM_BINDINGS
+    #undef X
+
+    return m3Err_none;
+}
+
+void wasm_task(void* parameter)
+{
+    int module_id = (int)(intptr_t)parameter;
+    
+    if (module_id < 0 || module_id >= NUM_MODULES) {
+        Serial.println("❌ Invalid module ID");
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    WasmModule* mod = &modules[module_id];
+    Serial.printf("🚀 Starting WASM Module: %s\n", mod->name);
+    
+    M3Result result = m3Err_none;
+
+    IM3Environment env = m3_NewEnvironment();
+    if (!env) {
+        Serial.println("❌ Failed to create environment");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    IM3Runtime runtime = m3_NewRuntime(env, WASM_STACK_SLOTS, NULL);
+    if (!runtime) {
+        Serial.println("❌ Failed to create runtime");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    runtime->memoryLimit = WASM_MEMORY_LIMIT;
+
+    IM3Module module;
+    result = m3_ParseModule(env, &module, mod->bytecode, mod->size);
+    if (result) {
+        Serial.print("❌ ParseModule failed: ");
+        Serial.println(result);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    result = m3_LoadModule(runtime, module);
+    if (result) {
+        Serial.print("❌ LoadModule failed: ");
+        Serial.println(result);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    result = LinkArduino(runtime);
+    if (result) {
+        Serial.print("❌ LinkArduino failed: ");
+        Serial.println(result);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    IM3Function f;
+    result = m3_FindFunction(&f, runtime, "_start");
+    if (result) {
+        Serial.print("❌ Cannot find _start function: ");
+        Serial.println(result);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    Serial.printf("✅ Running module: %s\n", mod->name);
+    Serial.println("📝 Send 's' to stop and return to menu");
+    
+    // Call the WASM function - this will run until stopped
+    result = m3_CallV(f);
+    
+    if (result) {
+        Serial.print("❌ WASM execution error: ");
+        Serial.println(result);
+    }
+
+    Serial.printf("🏁 Module '%s' stopped\n", mod->name);
+    vTaskDelete(NULL);
+}
+
+void show_menu()
+{
+    Serial.println("\n");
+    Serial.println("🔧 WASM Module Selector");
+    Serial.println("=");
+    Serial.println("Available modules:");
+    
+    for (int i = 0; i < NUM_MODULES; i++) {
+        Serial.printf("%d. %s (%d bytes)\n", i + 1, modules[i].name, modules[i].size);
+    }
+    
+    Serial.println("s. Stop current module");
+    Serial.println("m. Show this menu");
+    Serial.println("r. Restart ESP32");
+    Serial.println("=");
+    Serial.print("Select option (1-" + String(NUM_MODULES) + "): ");
+}
+
+void stop_current_module()
+{
+    if (wasm_task_handle != NULL) {
+        Serial.println("🛑 Stopping current module...");
+        vTaskDelete(wasm_task_handle);
+        wasm_task_handle = NULL;
+        current_module = -1;
+        Serial.println("✅ Module stopped");
+    } else {
+        Serial.println("ℹ️  No module is currently running");
+    }
+}
+
+void start_module(int module_id)
+{
+    if (module_id < 0 || module_id >= NUM_MODULES) {
+        Serial.println("❌ Invalid module selection");
+        return;
+    }
+    
+    // Stop current module if running
+    stop_current_module();
+    
+    // Start new module
+    current_module = module_id;
+    xTaskCreate(&wasm_task, 
+                modules[module_id].name, 
+                NATIVE_STACK_SIZE, 
+                (void*)(intptr_t)module_id, 
+                5, 
+                &wasm_task_handle);
+    
+    Serial.printf("🚀 Started module: %s\n", modules[module_id].name);
+}
+
+void handle_serial_input()
+{
+    if (Serial.available()) {
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+        
+        if (input.length() == 0) return;
+        
+        char cmd = input.charAt(0);
+        
+        switch (cmd) {
+            case '1':
+            case '2':
+            case '3':
+                {
+                    int module_id = cmd - '1';
+                    if (module_id < NUM_MODULES) {
+                        start_module(module_id);
+                    } else {
+                        Serial.println("❌ Invalid module number");
+                        show_menu();
+                    }
+                }
+                break;
+                
+            case 's':
+            case 'S':
+                stop_current_module();
+                show_menu();
+                break;
+                
+            case 'm':
+            case 'M':
+                show_menu();
+                break;
+                
+            case 'r':
+            case 'R':
+                Serial.println("🔄 Restarting ESP32...");
+                delay(1000);
+                ESP.restart();
+                break;
+                
+            default:
+                Serial.printf("❌ Unknown command '%c'\n", cmd);
+                show_menu();
+                break;
+        }
+    }
+}
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+    
+    // Wait for serial port to connect
+    while(!Serial) {}
+    
+    Serial.println("\n🎉 ESP32 WASM3 Multi-Module System");
+    Serial.println("Wasm3 v" M3_VERSION " (" M3_ARCH "), build " __DATE__ " " __TIME__);
+        
+    show_menu();
+}
+
+void loop()
+{
+    handle_serial_input();
+    delay(100);
+}
