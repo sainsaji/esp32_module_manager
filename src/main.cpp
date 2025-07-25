@@ -5,6 +5,20 @@
 #include "wifi_manager.h"
 #include <wasm3.h>
 #include <Preferences.h>
+#include <Wire.h>
+#include <CST816S.h>
+#include <lvgl.h>
+#include "ui_lvgl.h"
+
+
+extern TFT_eSPI tft;
+
+#define TOUCH_SDA 6
+#define TOUCH_SCL 7
+#define TOUCH_RST 13
+#define TOUCH_IRQ 5
+
+CST816S touch(TOUCH_SDA, TOUCH_SCL, TOUCH_RST, TOUCH_IRQ);
 
 // TFT setup
 TFT_eSPI tft = TFT_eSPI();
@@ -25,14 +39,10 @@ void setup() {
     while (!Serial) {}
 
     // === TFT UI INIT ===
+    touch.begin();
     tft.init();
-    tft.setRotation(0);
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setCursor(40, 100);
-    tft.println("TFT Working!");
-
+    tft.setRotation(0); 
+    ui_init();
     // === Serial Menu Init ===
     Serial.println("\n🎉 ESP32 WASM3 Dynamic Module Loader");
     Serial.println("=====================================");
@@ -50,6 +60,7 @@ void setup() {
 
 void loop() {
     handle_serial_input();
+    lv_timer_handler();
 
     if (wifi_enabled && (millis() - last_wifi_check > WIFI_CHECK_INTERVAL)) {
         check_wifi_status();
