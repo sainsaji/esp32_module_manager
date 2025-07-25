@@ -1,10 +1,22 @@
 #pragma once
+#include <Arduino.h>
 
 struct WasmModule {
-    const char* name;
-    const unsigned char* bytecode;
-    unsigned int size;
+    String name;
+    String url;
+    uint8_t* bytecode;
+    size_t size;
+    bool loaded;
 };
 
 extern WasmModule modules[];
-extern const int NUM_MODULES;
+extern const int MAX_MODULES;
+extern int num_loaded_modules;
+
+// Module management functions
+void init_modules();
+void cleanup_modules();
+bool add_module(const String& name, const String& url);
+bool remove_module(int index);
+bool download_module(int index);
+void list_modules();

@@ -18,14 +18,13 @@ DEFINE_WASM_API(
 
 DEFINE_WASM_API(
   m3_arduino_print,
-  m3ApiGetArgMem(const uint8_t *, buf)
-  m3ApiGetArg(uint32_t, len),
-  Serial.write(buf, len)
+  m3ApiGetArgMem(const char*, str),
+  Serial.print(str)
 )
 
 #define ARDUINO_WASM_BINDINGS \
     X("arduino_delay",      "v(i)",   m3_arduino_delay) \
-    X("arduino_print",      "v(*i)",  m3_arduino_print) \
+    X("arduino_print",      "v(*)",   m3_arduino_print) \
 
 M3Result LinkArduino(IM3Runtime runtime)
 {

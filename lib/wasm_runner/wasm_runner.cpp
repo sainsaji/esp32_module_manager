@@ -19,13 +19,20 @@ void wasm_task(void* parameter)
 {
     int module_id = (int)(intptr_t)parameter;
 
-    if (module_id < 0 || module_id >= NUM_MODULES) {
+    if (module_id < 0 || module_id >= MAX_MODULES || modules[module_id].name.isEmpty()) {
         Serial.println("❌ Invalid module ID");
         vTaskDelete(NULL);
         return;
     }
 
     WasmModule* mod = &modules[module_id];
+    
+    // Check if module is loaded
+    if (!mod->loaded || mod->bytecode == nullptr) {
+        Serial.println("❌ Module not loaded. Please download it first.");
+        vTaskDelete(NULL);
+        return;
+    }
     Serial.printf("🚀 Starting WASM Module: %s\n", mod->name);
 
     IM3Environment env = m3_NewEnvironment();
@@ -107,8 +114,13 @@ void stop_current_module()
 
 void start_module(int module_id)
 {
-    if (module_id < 0 || module_id >= NUM_MODULES) {
+    if (module_id < 0 || module_id >= MAX_MODULES || modules[module_id].name.isEmpty()) {
         Serial.println("❌ Invalid module selection");
+        return;
+    }
+    
+    if (!modules[module_id].loaded) {
+        Serial.println("❌ Module not loaded. Download it first with 'l' command.");
         return;
     }
 
@@ -116,11 +128,11 @@ void start_module(int module_id)
 
     current_module = module_id;
     xTaskCreate(&wasm_task,
-                modules[module_id].name,
+                modules[module_id].name.c_str(),
                 NATIVE_STACK_SIZE,
                 (void*)(intptr_t)module_id,
                 5,
                 &wasm_task_handle);
 
-    Serial.printf("🚀 Started module: %s\n", modules[module_id].name);
+    Serial.printf("🚀 Started module: %s\n", modules[module_id].name.c_str());
 }
