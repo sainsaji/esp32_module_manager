@@ -1,9 +1,13 @@
 #include <Arduino.h>
+#include <TFT_eSPI.h>
 #include "modules.h"
 #include "wasm_runner.h"
 #include "wifi_manager.h"
 #include <wasm3.h>
 #include <Preferences.h>
+
+// TFT setup
+TFT_eSPI tft = TFT_eSPI();
 
 extern int current_module;
 Preferences preferences;
@@ -13,41 +17,45 @@ void handle_serial_input();
 void handle_module_management();
 void save_module_list();
 void load_module_list();
-String get_user_input(const char* prompt);  // New function for safe input
+String get_user_input(const char* prompt);
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
     while (!Serial) {}
 
+    // === TFT UI INIT ===
+    tft.init();
+    tft.setRotation(0);
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(40, 100);
+    tft.println("TFT Working!");
+
+    // === Serial Menu Init ===
     Serial.println("\n🎉 ESP32 WASM3 Dynamic Module Loader");
     Serial.println("=====================================");
     Serial.println(
         String("Wasm3 v") + M3_VERSION + " (" + M3_ARCH + "), build " + __DATE__ + " " + __TIME__
     );
-    
-    // Initialize preferences
+
     preferences.begin("wasm-loader", false);
-    
-    // Initialize modules
     init_modules();
-    load_module_list();  // Load saved module list if exists
-    
-    // Initialize WiFi
+    load_module_list();
     setup_wifi();
-    
+
     show_menu();
 }
 
 void loop() {
     handle_serial_input();
-    
-    // Check WiFi status periodically
+
     if (wifi_enabled && (millis() - last_wifi_check > WIFI_CHECK_INTERVAL)) {
         check_wifi_status();
         last_wifi_check = millis();
     }
-    
+
     delay(100);
 }
 
