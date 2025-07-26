@@ -28,8 +28,20 @@ void disconnect_wifi();
 void show_wifi_status();
 void setup_time();
 void show_system_info();
+void show_wifi_screen();
 
 // WiFi Command Handlers
 bool handle_wifi_command(char cmd);
+
+// LVGL UI integration
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void create_wifi_screen();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // WIFI_MANAGER_H
